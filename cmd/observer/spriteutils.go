@@ -5,7 +5,6 @@ import (
 	"image"
 	_ "image/jpeg" // jpeg
 	_ "image/png"  // png
-	"os"
 
 	"github.com/faiface/pixel"
 	"github.com/faiface/pixel/text"
@@ -29,15 +28,15 @@ func init() {
 
 }
 
-func p2f(p pixel.Vec) [2]float64 {
-	return [2]float64{
-		p.X,
-		p.Y,
-	}
-}
-func i642V(x, y int64) pixel.Vec {
-	return pixel.V(float64(x), float64(y))
-}
+// func p2f(p pixel.Vec) [2]float64 {
+// 	return [2]float64{
+// 		p.X,
+// 		p.Y,
+// 	}
+// }
+// func i642V(x, y int64) pixel.Vec {
+// 	return pixel.V(float64(x), float64(y))
+// }
 
 func mkfont(playerid uint64, fontsize float64, font string) (t *text.Text) {
 	if fontsize == 0 {
@@ -61,26 +60,26 @@ func loadPicture(path string) (pixel.Picture, error) {
 	return pixel.PictureDataFromImage(img), nil
 }
 
-func loadPictureFromFile(path string) (pixel.Picture, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	img, _, err := image.Decode(file)
-	if err != nil {
-		return nil, err
-	}
-	return pixel.PictureDataFromImage(img), nil
-}
-func loadSprite(path string) (*pixel.Sprite, error) {
-	pic, err := loadPicture(path)
-	if err != nil {
-		panic(err)
-	}
-	sprite := pixel.NewSprite(pic, pic.Bounds())
-	return sprite, nil
-}
+// func loadPictureFromFile(path string) (pixel.Picture, error) {
+// 	file, err := os.Open(path)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	defer file.Close()
+// 	img, _, err := image.Decode(file)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return pixel.PictureDataFromImage(img), nil
+// // }
+// func loadSprite(path string) (*pixel.Sprite, error) {
+// 	pic, err := loadPicture(path)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	sprite := pixel.NewSprite(pic, pic.Bounds())
+// 	return sprite, nil
+// }
 
 func loadTTF(path string, size float64, origin pixel.Vec) *text.Text {
 	b := assets.MustAsset(path)

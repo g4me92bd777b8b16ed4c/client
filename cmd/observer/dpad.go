@@ -23,7 +23,7 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 	dir := pixel.ZV
 	dpad := byte(0)
 	playerSpeed := 10.0
-	//pos = pixel.Lerp(pos, pixel.V(me.X(), me.Y()), 0.5)
+	pos := pixel.V(g.me.X(), g.me.Y())
 	// pos.X = math.Floor(pos.X)
 	// pos.Y = math.Floor(pos.Y)
 	// if win.JustPressed(pixelgl.MouseButtonLeft) {
@@ -142,9 +142,9 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 		}
 		//g.spritematrices[g.playerid] = pixel.IM.Scaled(pixel.ZV, 4).Moved(pos)
 		g.dpad.Store(dpad)
-		// if dpad != 0 {
-		// 	g.world.Update(&Player{PID: g.playerid, pos: pos})
-		// }
+		if dpad != 0 {
+			g.world.Update(&Player{PID: g.playerid, pos: pos})
+		}
 
 		if g.win.JustPressed(pixelgl.KeyPageDown) {
 			g.paging += PageAmount
@@ -221,7 +221,7 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 		}
 	}
 	if g.camlock {
-		g.camPos = g.pos
+		g.camPos = pixel.Lerp(g.camPos, being2vec(g.me), 0.5)
 	}
 	return false, nil
 }

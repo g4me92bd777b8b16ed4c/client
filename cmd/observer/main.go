@@ -334,15 +334,15 @@ func (g *Game) mainloop() {
 	lastnetsend := 0
 	lastnetrecv := 0
 	landframes := map[types.Type]pixel.Rect{
-		types.TileGrass: pixel.R(222, 427-169, 222+15, 427-169+15),
-		types.TileWater: pixel.R(222, 427-169, 222+15, 427-169+15),
-		types.TileRock:  pixel.R(222, 427-169, 222+15, 427-169+15),
+		types.TileGrass: pixel.R(222, 427-170, 222+16, 427-170+16),
+		types.TileWater: pixel.R(341, 427-289, 341+16, 427-289+16),
+		types.TileRock:  pixel.R(239, 427-153, 239+16, 427-153+16),
 	}
 	landsheet := spritesheet2
-	me := g.world.Get(g.playerid)
-	if me == nil {
+	g.me = g.world.Get(g.playerid)
+	if g.me == nil {
 		g.world.Update(&Player{PID: g.playerid, pos: pixel.ZV})
-		me = g.world.Get(g.playerid)
+		g.me = g.world.Get(g.playerid)
 	}
 	g.camlock = true
 	if g.sprites[types.Player] == nil {
@@ -366,24 +366,27 @@ func (g *Game) mainloop() {
 	newbatch(types.TileGrass, landsheet)
 	batches[types.TileRock] = batches[types.TileGrass]
 	batches[types.TileWater] = batches[types.TileGrass]
-
+	gettype := func() types.Type {
+		n := types.Type(rand.Intn(3))
+		return n + types.TileGrass
+	}
 	world := g.world
-	themap := []*worldpkg.Tile{}
-	for y := 0.0; y < 1000; y = y + 16 {
-		for x := 0.0; x < 1000; x = x + 16 {
-			world.NewTile(types.TileGrass, x, y)
+	wid, height := 16.0, 16.0
+	sizegrid := 256.0
+	for y := 0.0; y < height*sizegrid; y = y + height {
+		for x := 0.0; x < wid*sizegrid; x = x + wid {
+			typ := gettype()
+			t := world.NewTile(typ, x, y)
+			g.world.SetTile(t)
+			g.sprites[t.Type].Draw(batches[t.Type], pixel.IM.Moved(t.Pos()))
 		}
 	}
-	for _, t := range themap {
-		g.world.SetTile(t)
-	}
+	// for _, t := range themap {
+	// 	g.world.SetTile(t)
+	// }
 
-	t := g.world.GetTile(pixel.V(0, 0))
-	switch t.Type {
-	case types.TileGrass:
-		g.sprites[t.Type].Draw(batches[t.Type], pixel.IM.Moved(t.Pos()))
-	default:
-	}
+	// t := g.world.GetTile(pixel.V(x, y))
+	// g.sprites[t.Type].Draw(batches[t.Type], pixel.IM.Moved(t.Pos()))
 
 	displaymsg := 0
 	var ui *pixel.Batch
@@ -398,13 +401,13 @@ func (g *Game) mainloop() {
 		"blue":   pixel.R(0, 0, 16, 16),
 		"grass":  pixel.R(222, 427-169, 222+15, 427-169+15),
 	}
-	background := pixel.NewBatch(&pixel.TrianglesData{}, uip)
-	grass := pixel.NewSprite(uip, uiframes["grass"])
-	for xy := 0.0; xy <= win.Bounds().H()+32; xy = xy + 32 {
-		for xc := 0.0; xc <= win.Bounds().W()+32; xc = xc + 32 {
-			grass.DrawColorMask(background, pixel.IM.Scaled(pixel.ZV, 2).Moved(pixel.V(xc, xy)), colornames.Blueviolet)
-		}
-	}
+	// background := pixel.NewBatch(&pixel.TrianglesData{}, uip)
+	// grass := pixel.NewSprite(uip, uiframes["grass"])
+	// for xy := 0.0; xy <= win.Bounds().H()+32; xy = xy + 32 {
+	// 	for xc := 0.0; xc <= win.Bounds().W()+32; xc = xc + 32 {
+	// 		grass.DrawColorMask(background, pixel.IM.Scaled(pixel.ZV, 2).Moved(pixel.V(xc, xy)), colornames.Blueviolet)
+	// 	}
+	// }
 
 	ui = pixel.NewBatch(&pixel.TrianglesData{}, uip)
 	dash := pixel.NewSprite(uip, uiframes["blue"])
@@ -544,9 +547,7 @@ func (g *Game) mainloop() {
 		sort.Sort(sorted)
 		//sort.Reverse(sorted)
 		spr := g.sprites[types.Player]
-
 		for i := range sorted {
-
 			// v := sorted[len(sorted)-(i+1)]
 			// id := v.ID()
 			// // color := colornames.Red
@@ -667,7 +668,7 @@ func (g *Game) readloop() {
 				log.Println("got player action from server:", a.ID, "NEWPOS", a.Pos, common.DPAD(a.DPad), "OLD POS", oldv)
 			}
 
-			pv := pixel.V(float64(a.Pos[0]), float64(a.Pos[1]))
+			pv := pixel.V(float64(a.At[0]), float64(a.At[1]))
 			g.world.Update(&Player{
 				PID: a.ID,
 				pos: pv,
@@ -747,9 +748,9 @@ func being2vec(b worldpkg.Being) pixel.Vec {
 	return pixel.V(b.X(), b.Y())
 }
 
-func mkcolortransparent(c color.Color, opacity float64) (out color.RGBA) {
-	out.A = uint8(math.Floor(opacity * 255.0))
-	r, g, b, _ := c.RGBA()
-	out.R, out.G, out.B = uint8(r>>4), uint8(g>>4), uint8(b>>4)
-	return
-}
+// func mkcolortransparent(c color.Color, opacity float64) (out color.RGBA) {
+// 	out.A = uint8(math.Floor(opacity * 255.0))
+// 	r, g, b, _ := c.RGBA()
+// 	out.R, out.G, out.B = uint8(r>>4), uint8(g>>4), uint8(b>>4)
+// 	return
+// }
