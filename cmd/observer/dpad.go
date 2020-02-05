@@ -61,6 +61,9 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 
 		}
 	}
+	if !g.settings.typing && inputbuf.Len() != 0 {
+		inputbuf.Reset()
+	}
 
 	if !g.settings.typing {
 		if win.Pressed(pixelgl.KeyW) {
@@ -124,11 +127,11 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 		}
 		if dpad != 0 || action.Action != 0 {
 			//go func() {
-				n, err := g.codec.Write(common.Message{Dpad: dpad, Action: action.Action})
-				if err != nil {
-					log.Fatalln("codc write dpad", err)
-				}
-				g.stats.netsent += n
+			n, err := g.codec.Write(common.Message{Dpad: dpad, Action: action.Action})
+			if err != nil {
+				log.Fatalln("codc write dpad", err)
+			}
+			g.stats.netsent += n
 			//}()
 			//g.pos = g.pos.Add(dir.Scaled(10 * dt))
 			// g.pos.X = math.Floor(g.pos.X)
@@ -139,7 +142,10 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 		//g.spritematrices[g.playerid] = pixel.IM.Scaled(pixel.ZV, 4).Moved(pos)
 		g.controls.dpad.Store(dpad)
 		if dpad != 0 {
-			g.world.Update(&Player{PID: g.playerid, pos: pos.Add(common.DIR(dpad).Vec().Scaled(1))})
+			xy := (pos.Add(common.DIR(dpad).Vec().Scaled(1)))
+			x, y := xy.X, xy.Y
+			g.me.MoveTo([2]float64{x, y})
+			g.world.Update(g.me)
 		}
 
 		if g.win.JustPressed(pixelgl.KeyPageDown) {
