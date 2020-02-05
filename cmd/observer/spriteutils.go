@@ -50,6 +50,15 @@ func mkfont(playerid uint64, fontsize float64, font string) (t *text.Text) {
 	return t
 }
 
+func mustLoadPicture(path string) (pixel.Picture) {
+	file := assets.MustAsset(path)
+
+	img, _, err := image.Decode(bytes.NewReader(file))
+	if err != nil {
+		panic(err)
+	}
+	return pixel.PictureDataFromImage(img)
+}
 func loadPicture(path string) (pixel.Picture, error) {
 	file := assets.MustAsset(path)
 

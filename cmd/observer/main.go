@@ -10,15 +10,18 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"runtime"
 	"sort"
 	"sync/atomic"
 
+	"github.com/aerth/spriteutil"
 	"gitlab.com/aerth/x/hash/argon2id"
 	"gitlab.com/g4me92bd777b8b16ed4c/common"
 	"gitlab.com/g4me92bd777b8b16ed4c/common/chatenc"
 	"gitlab.com/g4me92bd777b8b16ed4c/common/chatstack"
 	"gitlab.com/g4me92bd777b8b16ed4c/common/codec"
 	"gitlab.com/g4me92bd777b8b16ed4c/common/types"
+
 	"golang.org/x/image/colornames"
 
 	"net"
@@ -27,13 +30,17 @@ import (
 	"time"
 
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 
 	"os"
-
+	"github.com/pkg/profile"
 	"github.com/faiface/pixel"
+	"github.com/faiface/pixel/imdraw"
 	"github.com/faiface/pixel/pixelgl"
 	"github.com/faiface/pixel/text"
 	basexlib "gitlab.com/aerth/x/encoding/basex"
+	"gitlab.com/g4me92bd777b8b16ed4c/assets"
 	worldpkg "gitlab.com/g4me92bd777b8b16ed4c/common/world"
 )
 
@@ -48,9 +55,49 @@ var basex = basexlib.NewAlphabet(basexlib.Base58Bitcoin)
 // func init() {
 // 	worldpkg.Type = types.World.Byte()
 // }
+func NewGame(playerid uint64) *Game {
+	return &Game{
+		playerid:       playerid,
 
+		// world
+		world:          worldpkg.New(), // holds position of rectangles
+
+		// sprites
+		pictures:       make(map[types.Type]pixel.Picture),
+		sprites:        make(map[types.Type]*pixel.Sprite),
+		spriteframes:   make(map[types.Type]map[byte][]pixel.Rect),
+		spritematrices: make(map[uint64]pixel.Matrix),
+
+		// chat
+		chatbuf:        chatstack.New(),
+		chatcrypt:      chatenc.Load("hello world, 123 451"),
+
+		// switches
+		settings: new(RuntimeSettings),
+		controls: new(Controls),
+		stats:    new(Stats),
+	}
+
+}
+
+func (g *Game) Connect() error {
+	log.Println("Connecting!")
+	// connect to server
+	conn, err := common.Connect(g.playerid, DefaultEndpoint, &common.ConnectOptions{})
+	if err != nil {
+		return err
+	}
+	log.Println("Connected to:", conn.RemoteAddr())
+	conn.SetWriteBuffer(1025)
+	conn.SetReadBuffer(1025)
+	// cool
+	g.conn = conn
+	g.codec = codec.NewCodec(common.Endian(), conn)
+	return nil
+	
+	
+}
 func main() {
-
 	// read command line flags
 
 	log.SetFlags(log.Lshortfile | log.Lmicroseconds)
@@ -60,12 +107,19 @@ func main() {
 	rand.Seed(xored) // random enough seed
 	playerid := rand.Uint64()
 	password := ""
+
+
 	flag.StringVar(&DefaultEndpoint, "s", DefaultEndpoint, "endpoint")
 	flag.Uint64Var(&playerid, "p", playerid, "endpoint")
 	flag.Int64Var(&xored, "seed", xored, "seed to use for fast random gen") // TODO: remove one day
 	flag.StringVar(&defaultChatChannel, "chatcrypt", "", "chatcrypt seed for secure messaging")
 	flag.StringVar(&password, "pass", "", "endpoint")
 	flag.Parse()
+	
+	if os.Getenv("DEBUG") != "" {
+	defer profile.Start().Stop()
+	}
+	
 	rand.Seed(xored) // random enough seed
 	if playerid == 0 {
 		playerid = rand.Uint64()
@@ -75,31 +129,17 @@ func main() {
 	log.Printf("Helo player %d", playerid)
 	hashedpassword := argon2id.New(1, 24, 1).Sum([]byte(password))
 	password = ""
+
 	var (
-		conn *net.TCPConn
 		game *Game
 		err  error
 	)
-	log.Println("Connecting!")
-	// connect to server
-	conn, err = common.Connect(playerid, DefaultEndpoint, &common.ConnectOptions{})
-	if err != nil {
-		log.Fatalln(err)
-	}
-	log.Println("Connected to:", conn.RemoteAddr())
+
 
 	// create empty world
-	game = &Game{
-		conn:           conn,
-		world:          worldpkg.New(), // holds position of rectangles
-		codec:          codec.NewCodec(common.Endian(), conn),
-		playerid:       playerid,
-		sprites:        make(map[types.Type]*pixel.Sprite),
-		spriteframes:   make(map[types.Type]map[byte][]pixel.Rect),
-		spritematrices: make(map[uint64]pixel.Matrix),
-		chatbuf:        chatstack.New(),
-		chatcrypt:      chatenc.Load("hello world, 123 451"),
-		statustxtbuf:   &bytes.Buffer{},
+	game = NewGame(playerid)
+	if err := game.Connect(); err != nil {
+		log.Fatalln(err)
 	}
 	game.spriteframes[types.Player] = make(map[byte][]pixel.Rect)
 	for i := byte(0); i < common.ALLDIR; i++ {
@@ -113,146 +153,180 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	game.spritesheet = spritesheet
-
-	tree := pixel.NewSprite(spritesheet, game.spriteframes[types.Player][common.DOWN][0])
-	game.sprites[types.Player] = tree
+	// game.spritesheet = spritesheet
+	game.sprites[types.Player] = pixel.NewSprite(spritesheet, game.spriteframes[types.Player][common.DOWN][0])
 	game.spritematrices[game.playerid] = pixel.IM.Scaled(pixel.ZV, 4)
-	game.dpad = new(atomic.Value)
-	game.dpad.Store(common.DOWN)
+	game.controls.dpad = new(atomic.Value)
+	game.controls.dpad.Store(common.DOWN)
 
 	n, err := game.codec.Write(common.Login{ID: playerid, Password: hashedpassword})
 	if err != nil {
 		log.Fatalln(err)
 	}
-	game.netsent += n
+	game.stats.netsent += n
 	log.Println("sent", n, "bytes for login")
-	killsound := make(chan struct{})
-	nextsound := make(chan struct{})
-	go game.soundtrack(nextsound, killsound)
+	// killsound := make(chan struct{})
+	// nextsound := make(chan struct{})
+	//go game.soundtrack(nextsound, killsound)
 	go game.readloop()
 	go game.writeloop()
-	game.mutechan = killsound
-	game.nextchan = killsound
-	game.muted = false
+	// game.mutechan = killsound
+	// game.nextchan = killsound
+	game.animations = &animationManager{
+		imdraw: imdraw.New(nil),
+		//animations: make([]Animation, 10),
+		i: 0,
+	}
+
 	pixelgl.Run(game.mainloop)
 }
 
 type RuntimeSettings struct {
 	showChat      bool
 	showWireframe bool
+	camlock       bool
+	Debug         bool
+	typing        bool
+	SortThings    bool
+}
+
+type Stats struct {
+	Ping              time.Duration
+	netsent, netrecvd int
+	displaymsg        byte
+	numplayer int
+}
+
+type Controls struct {
+	paging     float64
+	pageselect byte // shouldnt overflow
+	muted      bool
+	dpad       *atomic.Value
 }
 type Game struct {
-	conn              *net.TCPConn
-	codec             *codec.Codec
-	world             *worldpkg.World
-	playerid          uint64
-	spritesheet       pixel.Picture
-	sprites           map[types.Type]*pixel.Sprite
-	spriteframes      map[types.Type]map[byte][]pixel.Rect
-	spritematrices    map[uint64]pixel.Matrix
-	dpad              *atomic.Value
-	camlock           bool
-	chatbuf           *chatstack.ChatStack
-	chattxt           *text.Text
-	chatcrypt         *chatenc.Crypt
-	win               *pixelgl.Window
-	chattxtbuffer     bytes.Buffer
-	paging            float64
-	pageselect        byte // shouldnt overflow
-	ping              int64
-	maplock           sync.Mutex
-	statustxtbuf      *bytes.Buffer
-	netsent, netrecvd int
-	mutechan          chan struct{}
-	nextchan          chan struct{}
-	muted             bool
-	Debug             bool
-	inputbuf          *bytes.Buffer
-	typing            bool
-	me                worldpkg.Being
-	displaymsg        byte
+	settings *RuntimeSettings
+	stats    *Stats
+	controls *Controls
 
-	settings     RuntimeSettings
+	// net
+	conn  *net.TCPConn
+	codec *codec.Codec
+
+	// world
+	world *worldpkg.World
+
+	// me
+	playerid uint64
+	me       worldpkg.Being
+
+	// graphics
+	pictures       map[types.Type]pixel.Picture
+	sprites        map[types.Type]*pixel.Sprite
+	spriteframes   map[types.Type]map[byte][]pixel.Rect
+	spritematrices map[uint64]pixel.Matrix
+
+	// chat
+	chatbuf   *chatstack.ChatStack // incoming messages
+	chattxt   *text.Text           // draw
+	chatcrypt *chatenc.Crypt
+	win       *pixelgl.Window
+
+	// storage buffer for between frames
+	chattxtbuffer bytes.Buffer
+	statustxtbuf  bytes.Buffer
+	inputbuf      bytes.Buffer // typing
+
+	// ping              int64
+	// maplock sync.Mutex
+
+	// mutechan chan struct{}
+	// nextchan chan struct{}
+
+	// camera
 	camPos       pixel.Vec
 	camSpeed     float64
 	camZoom      float64
 	camZoomSpeed float64
 	cam          pixel.Matrix
-	pos          pixel.Vec
+
+	animations *animationManager
 	//
 
 }
 
-func (g *Game) soundtrack(next, kill chan struct{}) {
 
-	// songs := []string{"music/link2past.mp3", "music/towntheme.mp3"}
-	// defer g.flashMessage("sound killed at %s", time.Now())
-	// muted := false
-	// done := make(chan bool)
-	// for {
+// func (g *Game) soundtrack(next, kill chan struct{}) {
 
-	// 	for _, songname := range songs {
-	// 		f, err := assets.Assets.Open(songname)
-	// 		if err != nil {
-	// 			log.Fatalln(err)
-	// 		}
+// }
 
-	// 		streamer, format, err := mp3.Decode(f)
-	// 		if err != nil {
-	// 			log.Fatal(err)
-	// 		}
+type GhostBomb struct {
+	PID    uint64
+	pos    pixel.Vec
+	aprite *spriteutil.AnimatedSprite
+}
 
-	// 		speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
-	// 		speaker.Play(beep.Seq(streamer, beep.Callback(func() {
-	// 			done <- true
-	// 		})))
-	// 		for {
-	// 			select {
-	// 			case <-next:
-	// 				g.flashMessage("Skipping song")
-	// 				f.Close()
-	// 				streamer.Close()
-	// 				continue
-	// 			case <-kill:
-	// 				muted = !muted
-	// 				g.flashMessage("Muted: %v", muted)
-	// 				if muted {
-	// 					speaker.Clear()
+func (p GhostBomb) ID() uint64 {
+	return p.PID
+}
 
-	// 				} else {
-	// 					speaker.Play(beep.Seq(streamer, beep.Callback(func() {
-	// 						done <- true
-	// 					})))
-	// 				}
-	// 			case <-done:
-	// 				g.flashMessage("Skipping song")
-	// 				f.Close()
-	// 				streamer.Close()
-	// 				continue
-	// 			}
-	// 		}
-	// 		streamer.Close()
-	// 	}
+func (p GhostBomb) X() float64 {
+	return p.pos.X
+}
 
-	// }
+func (p GhostBomb) Y() float64 {
+	return p.pos.Y
+}
+
+func (p GhostBomb) Type() types.Type {
+	return types.GhostBomb
+}
+func (p GhostBomb) Pos() pixel.Vec {
+	return p.pos
+}
+
+func (g *GhostBomb) MoveTo(xy [2]float64) {
+	g.pos.X = xy[0]
+	g.pos.Y = xy[1]
 }
 
 type Player struct {
 	sprite *pixel.Sprite
 	PID    uint64
 	pos    pixel.Vec
+	mu     sync.Mutex
+	HP float64
+	MP float64
 }
-
+func (e Player) Health() float64{
+	return e.HP
+}
+func (e *Player) DealDamage(amount float64) float64{
+	if e.HP < amount {
+		e.HP = 0
+		return 0
+	}
+	e.HP -= amount
+	return e.HP
+}
+func (p *Player) MoveTo(xy [2]float64) {
+	p.mu.Lock()
+	p.pos.X = xy[0]
+	p.pos.Y = xy[1]
+	p.mu.Unlock()
+}
 func (p Player) ID() uint64 {
 	return p.PID
 }
 
 func (p Player) X() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.pos.X
 }
 
 func (p Player) Y() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.pos.Y
 }
 
@@ -265,10 +339,28 @@ func (p Player) Pos() pixel.Vec {
 
 var PageAmount = 24.0
 
+const helpModeText = `` +
+	`
+		WIREFRAME 0, ASYNC 1, DEBUG 4
+		CAMLOCK '='
+		TOGGLE CHAT 'TAB' CHAT 'Enter"
+		COMMAND '/'
+		FULLSCREEN 'Ctrl+F'
+		Scroll: PGUP/PGDOWN
+		Camera: Arrows
+		Move: WASD
+		Slash: Spacebar
+		
+`
+
+func mkcolor(i uint64) color.Color {
+	return colors[i%uint64(len(colors))]
+}
+
 func (g *Game) flashMessage(f string, i ...interface{}) {
-	//g.displaymsg = 0
+	g.stats.displaymsg = 0
 	g.statustxtbuf.Reset()
-	fmt.Fprintf(g.statustxtbuf, f, i...)
+	fmt.Fprintf(&g.statustxtbuf, f, i...)
 }
 func (g *Game) mainloop() {
 	var (
@@ -284,6 +376,14 @@ func (g *Game) mainloop() {
 		VSync:     true,
 		Resizable: true,
 	}
+	go func() {
+		if err := http.ListenAndServe("localhost:6061", nil); err != nil {
+			if err := http.ListenAndServe("localhost:6062", nil); err != nil {
+				log.Println("debug listener http:", err)
+			}
+		}
+	}()
+
 
 	win, err = pixelgl.NewWindow(cfg)
 	if err != nil {
@@ -291,11 +391,6 @@ func (g *Game) mainloop() {
 	}
 
 	g.win = win
-
-	newbatch := func(t types.Type, pic pixel.Picture) {
-		batches[t] = pixel.NewBatch(&pixel.TrianglesData{}, pic)
-	}
-	newbatch(types.Player, g.spritesheet)
 	g.camPos = pixel.ZV
 	g.camSpeed = 500.0
 	g.camZoom = 1.0
@@ -304,32 +399,46 @@ func (g *Game) mainloop() {
 	last := time.Now()
 
 	//pos := pixel.ZV
-	mkcolor := func(i uint64) color.Color {
-		col := colors[i%uint64(len(colors))]
-		c := col.(color.RGBA)
-		c.A = 255
-		return c
+
+
+	newbatch := func(t types.Type, pic pixel.Picture) {
+		batches[t] = pixel.NewBatch(&pixel.TrianglesData{}, pic)
+		g.pictures[t] = pic
 	}
 
-	var txtbar = mkfont(0, 22.0, "")
-	g.inputbuf = new(bytes.Buffer)
-	// [0] is player
+	playerspritesheet := mustLoadPicture("spritesheet/link.png")
+	spritesheet2 := mustLoadPicture("spritesheet/overworld_tileset.png")
+	heartpic := mustLoadPicture("spritesheet/heart2.png") // 27x23
+	uip := mustLoadPicture("spritesheet/overworld_tileset.png")
+	
+	// load heart
+	heart := pixel.NewSprite(heartpic, heartpic.Bounds())
+	var ui *pixel.Batch
+	
 
-	spritesheet2, err := loadPicture("spritesheet/overworld_tileset.png")
+	// load ghost
+	f, _ := assets.Assets.Open("gif/ghost.gif")
+	ghost, err := spriteutil.LoadGif(f)
 	if err != nil {
 		log.Fatalln(err)
 	}
+	f.Close()
+
+
+
+	newbatch(types.Player, playerspritesheet)
+	newbatch(types.TileGrass, spritesheet2)
 
 	//sprites2 := []*pixel.Sprite{}
 	//matrix2 := []pixel.Matrix{}
 	// spritesheet2frames := map[string]pixel.Rect{
 	// 	"X": pixel.R(272, 225, 272+16, 225+16),
 	// }
-	statustxt := mkfont(0, 24.0, "font/computer-font.ttf")
+	statustxt := mkfont(0, 18.0, "font/elronmonospace.ttf")
+	//statustxt := mkfont(0, 24.0, "font/.ttf")
 	second := time.Tick(time.Second)
 	fps := 0
 	lastdt := 0.0
-	showChat := true
 	lastfps := 0
 	lastnetsend := 0
 	lastnetrecv := 0
@@ -344,11 +453,8 @@ func (g *Game) mainloop() {
 		g.world.Update(&Player{PID: g.playerid, pos: pixel.ZV})
 		g.me = g.world.Get(g.playerid)
 	}
-	g.camlock = true
-	if g.sprites[types.Player] == nil {
-		tree := pixel.NewSprite(g.spritesheet, g.spriteframes[types.Player][common.DOWN][rand.Intn(len(g.spriteframes[types.Player][common.DOWN]))])
-		g.sprites[types.Player] = tree
-	}
+	g.settings.camlock = true
+	g.sprites[types.Player] = pixel.NewSprite(g.pictures[types.Player], g.spriteframes[types.Player][common.DOWN][rand.Intn(len(g.spriteframes[types.Player][common.DOWN]))])
 
 	if g.sprites[types.TileGrass] == nil {
 		tree := pixel.NewSprite(landsheet, landframes[types.TileGrass])
@@ -367,18 +473,25 @@ func (g *Game) mainloop() {
 	batches[types.TileRock] = batches[types.TileGrass]
 	batches[types.TileWater] = batches[types.TileGrass]
 	gettype := func() types.Type {
-		n := types.Type(rand.Intn(3))
+		n := types.Type(rand.Intn(5))
+		if n >= 3 {
+			n = 0
+		}
 		return n + types.TileGrass
 	}
 	world := g.world
 	wid, height := 16.0, 16.0
+	scale := 10.0
+	wid *= scale
+	height *= scale
 	sizegrid := 256.0
+	log.Println("Drawing map")
 	for y := 0.0; y < height*sizegrid; y = y + height {
 		for x := 0.0; x < wid*sizegrid; x = x + wid {
 			typ := gettype()
 			t := world.NewTile(typ, x, y)
 			g.world.SetTile(t)
-			g.sprites[t.Type].Draw(batches[t.Type], pixel.IM.Moved(t.Pos()))
+			g.sprites[t.Type].Draw(batches[t.Type], pixel.IM.Scaled(pixel.ZV, scale).Moved(t.Pos()))
 		}
 	}
 	// for _, t := range themap {
@@ -388,12 +501,7 @@ func (g *Game) mainloop() {
 	// t := g.world.GetTile(pixel.V(x, y))
 	// g.sprites[t.Type].Draw(batches[t.Type], pixel.IM.Moved(t.Pos()))
 
-	displaymsg := 0
-	var ui *pixel.Batch
-	uip, err := loadPicture("spritesheet/overworld_tileset.png")
-	if err != nil {
-		log.Fatalln(err)
-	}
+
 	uiframes := map[string]pixel.Rect{
 		"X":      pixel.R(272, 225, 272+16, 225+16),
 		"stone":  pixel.R(86.5, 379, 86.5+16, 379+16),
@@ -417,18 +525,29 @@ func (g *Game) mainloop() {
 	}
 
 	//xpos := g.world.Get(g.playerid)
-	pos := pixel.ZV
+	//pos := pixel.ZV
 	fullscreen := false
 	clearablebatches := []*pixel.Batch{
 		batches[types.Player],
 	}
+	var numgoroutines = runtime.NumGoroutine()
+	var memstats = new(runtime.MemStats)
+
+	fmt.Fprintf(&g.chattxtbuffer, "%s\n\n", helpModeText)
+	g.controls.paging += 9 * PageAmount
+	playertext := mkfont(0, 12.0, "")
+	g.settings.showChat = true
+	dt := 0.0
+	var worldlen = 0
+
 	for !win.Closed() {
-		dt := time.Since(last).Seconds()
+		dt = time.Since(last).Seconds()
 		//playerSpeed = 100.0 * dt
 		last = time.Now()
 		fps++
-		g.cam = pixel.IM.Scaled(g.camPos, g.camZoom).Moved(win.Bounds().Center().Sub(g.camPos))
+
 		// dpad = 0
+
 		// dir.X = 0
 		// dir.Y = 0
 		win.SetMatrix(g.cam)
@@ -444,20 +563,23 @@ func (g *Game) mainloop() {
 		}
 
 		typin := "false"
-		if g.typing {
+		if g.settings.typing {
 			typin = g.inputbuf.String()
 		}
 		statustxt.Clear()
-		g.maplock.Lock()
-		worldlen := g.world.Len()
-		fmt.Fprintf(statustxt, ""+
-			"DT=%.0fms FPS=%d PING=%dms PLAYERS=(%d online) VERSION=%s\n"+
-			"NET SENT=%04db/s RECV=%06d b/s GPS=%03.0f,%03.0f TYPING=%q\n%s",
-			lastdt*1000, lastfps, g.ping, worldlen, Version,
-			lastnetsend, lastnetrecv, g.pos.X, g.pos.Y, typin, g.statustxtbuf.String(),
-		)
 
-		g.maplock.Unlock()
+		
+		fmt.Fprintf(statustxt, ""+
+			"DT=%.0fms FPS=%d PING=%s (%d entities) (%d online) VERSION=%s\n"+
+			"NET SENT=%04db/s RECV=%06d b/s GPS=%03.0f,%03.0f TYPING=%q\n%s\n"+
+			"heapalloc %v objects %v heap freed %v freed %v sys=%v mallocs=%v\n"+
+			"pausetotalNs=%v numgc=%v goroutines=%v\n",
+			lastdt*1000, lastfps, g.stats.Ping, worldlen, g.stats.numplayer, Version,
+			lastnetsend, lastnetrecv, g.me.X(), g.me.Y(), typin, g.statustxtbuf.String(),
+			memstats.HeapAlloc, memstats.HeapObjects, memstats.HeapReleased, memstats.TotalAlloc-memstats.Alloc, memstats.Sys, memstats.Mallocs,
+			memstats.PauseTotalNs, memstats.NumGC,
+			numgoroutines,
+		)
 
 		select {
 		default:
@@ -465,23 +587,31 @@ func (g *Game) mainloop() {
 			lastfps = fps
 			fps = 0
 			lastdt = dt
-			lastnetrecv = g.netrecvd
-			lastnetsend = g.netsent
-			g.netsent = 0
-			g.netrecvd = 0
-			displaymsg++
-			if displaymsg > 5 { // show message for 5 seconds
-				displaymsg = 0
+			lastnetrecv = g.stats.netrecvd
+			lastnetsend = g.stats.netsent
+			g.stats.netsent = 0
+			g.stats.netrecvd = 0
+			runtime.ReadMemStats(memstats)
+			worldlen = g.world.Len()
+
+			// increment displaymsg and reset buffer if over 5 sec
+			g.stats.displaymsg++
+			if g.stats.displaymsg > 5 { // show message for 5 seconds
+				g.stats.displaymsg = 0
 				g.statustxtbuf.Reset()
 			}
+
+			numgoroutines = runtime.NumGoroutine()
 
 		}
 
 		cont, err := g.controldpad(dt)
 		if err != nil {
 			if err.Error() == "quit" {
+				log.Println("Bailing!")
 				win.Destroy()
-				os.Exit(0)
+
+				break
 			}
 			log.Fatalln(err)
 		}
@@ -489,13 +619,18 @@ func (g *Game) mainloop() {
 		if cont {
 			continue
 		}
-
-		pos.X = g.me.X()
-		pos.Y = g.me.Y()
+		g.cam = pixel.IM.Scaled(g.camPos, g.camZoom).Moved(win.Bounds().Center().Sub(g.camPos))
+		// pos.X = g.me.X()
+		// pos.Y = g.me.Y()
 		g.camZoom *= math.Pow(g.camZoomSpeed, win.MouseScroll().Y)
 
 		win.Clear(colornames.Forestgreen)
+		win.SetMatrix(g.cam)
+		//g.win.SetMatrix(pixel.IM.Scaled(g.camPos, 10*g.camZoom).Moved(win.Bounds().Center().Sub(g.camPos)))
+		for _, batch := range []*pixel.Batch{batches[types.TileGrass]} {
 
+			batch.Draw(win)
+		}
 		// begin draw
 		//background.Draw(g.win)
 		g.win.SetMatrix(g.cam)
@@ -508,7 +643,8 @@ func (g *Game) mainloop() {
 		g.win.SetMatrix(pixel.IM)
 
 		// chat
-
+	
+		g.animations.Update(dt)
 		var msg chatstack.ChatMessage
 		for i := 0; i < 10; i++ {
 			msg = g.chatbuf.Pop()
@@ -520,33 +656,37 @@ func (g *Game) mainloop() {
 			if len(from) > 5 {
 				from = from[:5]
 			}
-			g.paging += PageAmount
+			g.controls.paging += PageAmount
 			fmt.Fprintf(&g.chattxtbuffer, "[%s] (%s) %q\n", from, msg.To, msg.Message)
 			fmt.Fprintf(os.Stderr, "[%s] (%s) %q\n", from, msg.To, msg.Message)
 		}
 		g.chattxt.Clear()
 		fmt.Fprintf(g.chattxt, "%s", g.chattxtbuffer.String())
-		if showChat {
+		if g.settings.showChat {
 			win.SetMatrix(pixel.IM)
-			g.chattxt.DrawColorMask(g.win, pixel.IM.Moved(pixel.V(10, g.win.Bounds().H()-300).Add(pixel.V(0, g.paging))), color.RGBA{0xff, 0xff, 0xff, 0xaa})
+			g.chattxt.DrawColorMask(g.win, pixel.IM.Moved(pixel.V(10, g.win.Bounds().H()-300).Add(pixel.V(0, g.controls.paging))), color.RGBA{0xff, 0xff, 0xff, 0xaa})
 		}
-
-		// win.SetMatrix(pixel.IM.Moved(pixel.V(0, g.win.Bounds().Max.Y-32)))
-		// ui.Draw(g.win) // upper bar
-		// win.SetMatrix(pixel.IM)
-		// ui.Draw(g.win) // lower bar
+		// if g.settings.Debug {
+		win.SetMatrix(pixel.IM.Moved(pixel.V(0, g.win.Bounds().Max.Y-32)))
+		ui.Draw(g.win) // upper bar
+		win.SetMatrix(pixel.IM.Moved(pixel.V(0, g.win.Bounds().Max.Y-64-32)))
+		ui.Draw(g.win) // upper bar
+		win.SetMatrix(pixel.IM)
+		ui.Draw(g.win) // lower bar
 		// draw status txt
 		statustxt.Draw(win, pixel.IM.Moved(pixel.V(2, g.win.Bounds().Max.Y-PageAmount-1)))
-
+		// }
 		win.SetMatrix(g.cam)
 		for _, v := range clearablebatches {
 			v.Clear()
 		}
+		g.animations.Clear()
 		sorted := g.world.SnapshotBeings()
 		_ = mkcolor
-		sort.Sort(sorted)
+		if g.settings.SortThings {
+			sort.Sort(sorted)
+		}
 		//sort.Reverse(sorted)
-		spr := g.sprites[types.Player]
 		for i := range sorted {
 			// v := sorted[len(sorted)-(i+1)]
 			// id := v.ID()
@@ -569,25 +709,48 @@ func (g *Game) mainloop() {
 			// 	g.spritematrices[id] = pixel.IM.Scaled(pixel.ZV, 4).Moved(newpos)
 			// }
 			//spr.DrawColorMask(batches[types.Player], g.spritematrices[id], mkcolortransparent(mkcolor(id), 0.5))
-			spr.Draw(batches[types.Player], pixel.IM.Scaled(pixel.ZV, 4).Moved(being2vec(sorted[i])))
+			bpos := being2vec(sorted[i])
+			switch sorted[i].Type() {
+			case types.GhostBomb:
+				ghost.Update(dt)
+				ghost.Draw(g.win, pixel.IM.Scaled(pixel.ZV, 1).Moved(being2vec(sorted[i])))
+			case types.Player:
+				//log.Println("Drawing player sprite")
+				dir := byte(rand.Intn(8))
+				g.sprites[types.Player].Set(g.pictures[types.Player], g.spriteframes[types.Player][dir][0])
+				g.sprites[types.Player].Draw(batches[types.Player], pixel.IM.Scaled(pixel.ZV, 4).Moved(being2vec(sorted[i])))
+			default:
+				log.Println("WHAT TYPE?!", sorted[i].Type().String())
+			}
+			playertext.Clear()
+			fmt.Fprintf(playertext, "%d", sorted[i].ID())
+			playertext.Draw(g.win, pixel.IM.Moved(bpos.Add(pixel.V(-10, -60))))
+
+			numHearts := 5.0
+			for i := 0.0; i < numHearts; i++ {
+				heart.Draw(win, pixel.IM.Moved(bpos.Add(pixel.V(-30+(i*16), 48))))
+			}
 			//	}
 
 		}
 
+		
 		//g.sprites[types.Player].DrawColorMask(batch, g.spritematrices[g.playerid], colornames.Green)
 		//g.maplock.Lock()
 		// draw player on top
 		//	g.spritematrices[g.playerid] = pixel.IM.Scaled(pixel.ZV, 4).Moved(pixel.V(math.Floor(g.pos.X), math.Floor(g.pos.Y)))
+		//pos := being2vec(g.me)
 		//g.sprites[types.Player].Draw(batches[types.Player], pixel.IM.Scaled(pixel.ZV, 4).Moved(pixel.V(math.Floor(pos.X), math.Floor(pos.Y))))
 		//g.sprites[types.Player].Draw(batches[types.Player], pixel.IM.Scaled(pixel.ZV, 4).Moved(pixel.V(math.Floor(g.pos.X), math.Floor(g.pos.Y))))
 		//g.maplock.Unlock()
 		//g.sprites[types.Player].DrawColorMask(batch, g.spritematrices[g.playerid], colornames.Green)
 		//	g.sprites[types.Player].DrawColorMask(batches[types.Player], pixel.IM.Scaled(pixel.ZV, 4).Moved(pixel.V(pos.X, pos.Y)), colornames.White)
-		for _, batch := range []*pixel.Batch{batches[types.TileWater], batches[types.TileGrass], batches[types.TileRock], batches[types.Player]} {
+		for _, batch := range []*pixel.Batch{batches[types.Player]} {
+			//log.Println("Drawing players")
 			batch.Draw(win)
 		}
-		txtbar.Draw(win, pixel.IM)
 
+		g.animations.Draw(win, being2vec(g.me), g.win.Bounds())
 		win.Update()
 	}
 }
@@ -597,14 +760,19 @@ var colors = palette.Plan9
 func (g *Game) readloop() {
 	buf := make([]byte, 1024)
 	var logoff = new(common.PlayerLogoff)
-	var entities = new(worldpkg.Beings)
+	// var entities = new(worldpkg.Beings)
+	var errcount = 0
 	for {
 		t, reqid, n, err := g.codec.Read(buf)
 		if err != nil {
-			log.Fatalln(err)
+			log.Println(err)
+			errcount++
+			if errcount > 3 {
+				log.Fatalln("max level of errors reached")
+			}
 		}
-		g.netrecvd += n
-		if g.Debug {
+		g.stats.netrecvd += n
+		if g.settings.Debug {
 			log.Printf("Got server packet #%d, type %d (%s) %d bytes", reqid, t, types.Type(t).String(), n)
 		}
 
@@ -614,111 +782,149 @@ func (g *Game) readloop() {
 			if err := ping.Decode(buf[:n]); err != nil {
 				log.Fatalln(err)
 			}
-			g.ping = time.Since(ping.Time).Milliseconds()
+			g.stats.Ping = time.Since(ping.Time)
 		case types.Pong:
-			ping := &common.Ping{}
+			ping := &common.Pong{}
 			if err := ping.Decode(buf[:n]); err != nil {
 				log.Fatalln(err)
 			}
-			g.ping = time.Since(ping.Time).Milliseconds()
+			g.stats.Ping = time.Since(ping.Time)
 		case types.UpdateGps:
 			log.Printf("UPDATE GPS:     %02x", buf[:n])
 		case types.UpdatePlayers:
 			log.Printf("UPDATE PLAYERS: %02x", buf[:n])
+		case types.RemoveEntity:
+			log.Println("removing entity")
+			m := &common.HealthReport{}
+			if err := g.codec.Decode(buf[:n], &m); err != nil {
+				log.Fatalln(err)
+			}
+			for playerid, v := range m.M {
+				g.world.DealDamage()
+			}
 		case types.PlayerMessage:
+
 			m := &common.PlayerMessage{}
 			if err := m.Decode(buf[:n]); err != nil {
 				log.Fatalln(err)
 			}
+			go func() {
+				b, err := basex.Decode(m.Message)
+				if err == nil {
 
-			b, err := basex.Decode(m.Message)
-			if err == nil {
-
-				msg := g.chatcrypt.Decrypt(b)
-				if msg == nil {
-					log.Println("COULD NOT DECRYPT")
-					//continue
+					msg := g.chatcrypt.Decrypt(b)
+					if msg == nil {
+						log.Println("COULD NOT DECRYPT")
+						//continue
+					}
+					log.Println("Got message:", m.Message)
+					g.chatbuf.Push(chatstack.ChatMessage{
+						From:    fmt.Sprintf("%d", m.From),
+						To:      fmt.Sprintf("%d", m.To),
+						Message: string(msg),
+					})
 				}
-				log.Println("Got message:", m.Message)
-				g.chatbuf.Push(chatstack.ChatMessage{
-					From:    fmt.Sprintf("%d", m.From),
-					To:      fmt.Sprintf("%d", m.To),
-					Message: string(msg),
-				})
-			}
+			}()
 		case types.PlayerLogoff:
 			if err := logoff.Decode(buf[:n]); err != nil {
 				log.Fatalln(err)
 			}
-			delete(g.spritematrices, logoff.UID)
-			g.world.Remove(logoff.UID)
-			g.flashMessage("Player logged off: %d", logoff.UID)
+			go func() {
+				delete(g.spritematrices, logoff.UID)
+				g.world.Remove(logoff.UID)
+				g.flashMessage("Player logged off: %d", logoff.UID)
+				g.stats.numplayer--
+			}()
+			
 		case types.PlayerAction:
 			//	g.maplock.Lock()
 			a := common.PlayerAction{}
 			if err := g.codec.Decode(buf[:n], &a); err != nil {
 				log.Fatalln(err)
 			}
-			oldpos := g.world.Get(a.ID)
-			if oldpos == nil {
-				oldpos = &Player{PID: a.ID}
-			}
-			oldv := pixel.V(float64(oldpos.X()), float64(oldpos.Y()))
-			if g.Debug {
-				log.Println("got player action from server:", a.ID, "NEWPOS", a.Pos, common.DPAD(a.DPad), "OLD POS", oldv)
-			}
-
-			pv := pixel.V(float64(a.At[0]), float64(a.At[1]))
-			g.world.Update(&Player{
-				PID: a.ID,
-				pos: pv,
-			})
-
-			if g.playerid != a.ID {
-				g.maplock.Lock()
-				g.spritematrices[a.ID] = pixel.IM.Scaled(pixel.ZV, 4).Moved(pv)
-				g.maplock.Unlock()
-			}
-
-		case types.World:
-
-			if g.Debug {
-				log.Printf("UPDATE WORLD:   %02x", buf[:n])
-			}
-			if err := entities.Decode(buf[:n]); err != nil {
-				log.Fatalln("decode world:", err)
-			}
-			if g.Debug {
-				log.Printf("GOT WORLD, len %d, bytes %02x", len(*entities), buf[:n])
-			}
-			if len(*entities) == 0 {
-				log.Fatalln("world is gone")
-			}
-			g.maplock.Lock()
-			for i, v := range *entities {
-				if g.Debug {
-					log.Printf("NEWMAP: [%d] %d (%02.2f,%02.2f) T=%d (%s) %T", i, v.ID(), v.X(), v.Y(), v.Type(), common.TYPE(v.Type()), v)
+			go func() {
+				being := g.world.Get(a.ID)
+				if being == nil {
+					// switch a.Type() {
+					// case types.Human:
+					// 	being = &Player{PID: a.ID}
+					// case types.GhostBomb:
+					// 	being = &GhostBomb{PID: a.ID}
+					// default:
+						log.Println("Skipping player action from unknown entity:", a.Type().String())
+						return
+					
 				}
-				if g.sprites[types.Player] == nil {
-					tree := pixel.NewSprite(g.spritesheet, g.spriteframes[types.Player][common.DOWN][rand.Intn(len(g.spriteframes[types.Player][common.DOWN]))])
-					g.sprites[types.Player] = tree
+				oldv := pixel.V(float64(being.X()), float64(being.Y()))
+				if g.settings.Debug {
+					log.Println("got player action from server:", a.ID, "NEWPOS", a.Pos, common.DPAD(a.DPad), "OLD POS", oldv)
+				}
+				if a.Action != 0 {
 
 				}
-				g.world.Update(v)
-			}
-			g.maplock.Unlock()
-			if g.Debug {
-				log.Println("END UPDATE WORLD")
-			}
+				// update world with new being position
+				pv := pixel.V(float64(a.At[0]), float64(a.At[1]))
+				being.MoveTo([2]float64{pv.X, pv.Y})
+				g.world.Update(being)
+				if a.Action != 0 {
+					if a.ID != g.playerid {
+						g.animations.Push(types.ActionManastorm, pv)
+						g.flashMessage("Player %d cast %s", a.ID, types.Type(a.Action).String())
+					}
+				}
+			}()
+
+		// case types.World:
+			// if g.settings.Debug {
+			// 	log.Printf("UPDATE WORLD:   %02x", buf[:n])
+			// }
+			// if err := entities.Decode(buf[:n]); err != nil {
+			// 	log.Fatalln("decode world:", err)
+			// }
+			// go func() {
+			// 	if g.settings.Debug {
+			// 		log.Printf("GOT WORLD, len %d, bytes %02x", len(*entities), buf[:n])
+			// 	}
+			// 	if len(*entities) == 0 {
+			// 		log.Fatalln("world is gone")
+			// 	}
+
+			// 	for i, v := range *entities {
+			// 		if g.settings.Debug {
+			// 			log.Printf("NEWMAP: [%d] %d (%02.2f,%02.2f) T=%d (%s) %T", i, v.ID(), v.X(), v.Y(), v.Type(), common.TYPE(v.Type()), v)
+			// 		}
+			// 		g.world.Update(v)
+			// 	}
+
+			// 	if g.settings.Debug {
+			// 		log.Println("END UPDATE WORLD")
+			// 	}
+			
 		case types.Player:
 
 			p := &common.Player{}
 			if err := p.Decode(buf[:n]); err != nil {
 				log.Fatalln(err)
 			}
-			log.Println("Got player:", p)
-			g.world.Update(p)
-			g.spritematrices[p.ID()] = pixel.IM.Scaled(pixel.ZV, 4).Moved(being2vec(p))
+			go func() {
+				//log.Println("Got player:", p)
+				if newplayer := g.world.Update(p); newplayer {
+					g.stats.numplayer++
+				}
+				//g.spritematrices[p.ID()] = pixel.IM.Scaled(pixel.ZV, 4).Moved(being2vec(p))
+			}()
+		case types.GhostBomb:
+
+			p := &common.Player{}
+			if err := p.Decode(buf[:n]); err != nil {
+				log.Fatalln(err)
+			}
+			
+			go func() {
+				//log.Println("Got player:", p)
+				g.world.Update(p)
+				//g.spritematrices[p.ID()] = pixel.IM.Scaled(pixel.ZV, 4).Moved(being2vec(p))
+			}()
 		default:
 			log.Fatalln("alien packet:", types.Type(t).String())
 		}
@@ -734,14 +940,9 @@ func (g *Game) writeloop() {
 		if err != nil {
 			log.Fatalln("write ping error:", err)
 		}
-		g.netsent += n
+		g.stats.netsent += n
 	}
 
-}
-
-func (p *Player) MoveTo(xy [2]float64) {
-	p.pos.X = xy[0]
-	p.pos.Y = xy[1]
 }
 
 func being2vec(b worldpkg.Being) pixel.Vec {

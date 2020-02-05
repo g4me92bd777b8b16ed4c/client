@@ -7,6 +7,7 @@ import (
 	"github.com/faiface/pixel/pixelgl"
 	"gitlab.com/g4me92bd777b8b16ed4c/common"
 	"gitlab.com/g4me92bd777b8b16ed4c/common/codec"
+	"gitlab.com/g4me92bd777b8b16ed4c/common/types"
 	"gitlab.com/g4me92bd777b8b16ed4c/common/updater"
 	"log"
 	"math"
@@ -22,42 +23,30 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 	win := g.win
 	dir := pixel.ZV
 	dpad := byte(0)
-	playerSpeed := 10.0
-	pos := pixel.V(g.me.X(), g.me.Y())
-	// pos.X = math.Floor(pos.X)
-	// pos.Y = math.Floor(pos.Y)
-	// if win.JustPressed(pixelgl.MouseButtonLeft) {
-	// 	g.maplock.Lock()
-	// 	x := pixel.NewSprite(spritesheet2, spritesheet2frames["X"])
 
-	// 	sprites2 = append(sprites2, x)
-	// 	mouse := cam.Unproject(win.MousePosition())
-	// //	log.Println("Put marker:", mouse)
-	// 	//matrix2 = append(matrix2, pixel.IM.Scaled(pixel.ZV, 4).Moved(mouse))
-	// 	g.maplock.Unlock()
-	// }
+	pos := pixel.V(g.me.X(), g.me.Y())
+
 	inputbuf := g.inputbuf
 	if win.JustPressed(pixelgl.KeyEscape) || (win.JustPressed(pixelgl.KeyQ) && win.Pressed(pixelgl.KeyLeftControl)) {
-		win.Destroy()
 		return false, errors.New("quit")
 	}
 
-	if g.typing && win.JustPressed(pixelgl.KeyBackspace) {
+	if g.settings.typing && win.JustPressed(pixelgl.KeyBackspace) {
 		if g.inputbuf.Len() != 0 {
 			g.inputbuf.Truncate(g.inputbuf.Len() - 1)
 		}
 	}
-	if g.typing {
-		fmt.Fprintf(g.inputbuf, "%s", win.Typed())
+	if g.settings.typing {
+		fmt.Fprintf(&g.inputbuf, "%s", win.Typed())
 		//	log.Println("Typing:", inputbuf.String())
 	}
-	if !g.typing && win.JustPressed(pixelgl.KeySlash) {
-		g.typing = true
-		fmt.Fprintf(g.inputbuf, "%s", "/")
+	if !g.settings.typing && win.JustPressed(pixelgl.KeySlash) {
+		g.settings.typing = true
+		fmt.Fprintf(&g.inputbuf, "%s", "/")
 	}
 	if win.JustPressed(pixelgl.KeyEnter) {
-		g.typing = !g.typing
-		if !g.typing && inputbuf.Len() != 0 {
+		g.settings.typing = !g.settings.typing
+		if !g.settings.typing && inputbuf.Len() != 0 {
 			if strings.HasPrefix(inputbuf.String(), "/") {
 				g.handleChatConsole()
 			} else {
@@ -66,50 +55,51 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 				if err != nil {
 					log.Fatalln(err)
 				}
-				g.netsent += n
+				g.stats.netsent += n
 			}
 			inputbuf.Reset()
 
 		}
 	}
 
-	if !g.typing {
+	if !g.settings.typing {
 		if win.Pressed(pixelgl.KeyW) {
-			dir.Y += 1 * playerSpeed
+			dir.Y += 1
 			dpad |= (common.UP)
 		}
 		if win.Pressed(pixelgl.KeyS) {
-			dir.Y -= 1 * playerSpeed
+			dir.Y -= 1
 			dpad |= (common.DOWN)
 		}
 		if win.Pressed(pixelgl.KeyA) {
-			dir.X -= 1 * playerSpeed
+			dir.X -= 1
 			dpad |= (common.LEFT)
 		}
 		if win.Pressed(pixelgl.KeyD) {
-			dir.X += 1 * playerSpeed
+			dir.X += 1
 			dpad |= (common.RIGHT)
 		}
 		angle2dpad := func(v pixel.Vec) byte {
 			v.X = math.Floor(v.X)
 			v.Y = math.Floor(v.Y)
+			log.Println("Angle2dpad:", v)
 			switch v {
 			case pixel.V(0, 1):
 				return common.UP
 			case pixel.V(1, 1):
 				return common.UPRIGHT
 			case pixel.V(-1, 1):
-				return common.LEFT
-			case pixel.V(1, 0):
+				return common.UPLEFT
+			case pixel.V(0, -1):
 				return common.DOWN
-			case pixel.V(1, 0):
+			case pixel.V(1, -1):
 				return common.DOWNRIGHT
 			case pixel.V(-1, 0):
-				return common.DOWNLEFT
+				return common.LEFT
 			case pixel.V(1, 0):
 				return common.RIGHT
-			case pixel.V(-1, 0):
-				return common.LEFT
+			case pixel.V(-1, -1):
+				return common.DOWNLEFT
 			default:
 				log.Println("UNKONWN ANGLE:", v)
 				log.Println(dpad)
@@ -118,9 +108,7 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 		}
 		if dpad == 0 {
 			if win.Pressed(pixelgl.MouseButtonRight) {
-
-				dpad = angle2dpad(g.cam.Unproject(win.MousePosition()).Unit().Scaled(1.5))
-
+				dpad = angle2dpad(win.MousePosition().Sub(win.Bounds().Center()).Unit().Add(pixel.V(0.4, 0.4)))
 				log.Println("MOUSE DIR:", common.DPAD(dpad))
 			}
 		}
@@ -128,12 +116,20 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 		// 	//xpos := g.world.Get(g.playerid)
 		// 	//pos = pixel.Lerp(pos, pixel.V(xpos.X(), xpos.Y()), 0.5)
 		// }
-		if dpad != 0 {
-			n, err := g.codec.Write(common.Message{Dpad: dpad})
-			if err != nil {
-				log.Fatalln("codc write dpad", err)
-			}
-			g.netsent += n
+		action := common.PlayerAction{}
+		if win.JustPressed(pixelgl.KeySpace) {
+			action.Action = types.ActionManastorm.Uint16()
+			g.animations.Push(types.ActionManastorm, pos)
+			g.flashMessage("Manastorm!")
+		}
+		if dpad != 0 || action.Action != 0 {
+			//go func() {
+				n, err := g.codec.Write(common.Message{Dpad: dpad, Action: action.Action})
+				if err != nil {
+					log.Fatalln("codc write dpad", err)
+				}
+				g.stats.netsent += n
+			//}()
 			//g.pos = g.pos.Add(dir.Scaled(10 * dt))
 			// g.pos.X = math.Floor(g.pos.X)
 			// g.pos.Y = math.Floor(g.pos.Y)
@@ -141,16 +137,16 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 
 		}
 		//g.spritematrices[g.playerid] = pixel.IM.Scaled(pixel.ZV, 4).Moved(pos)
-		g.dpad.Store(dpad)
+		g.controls.dpad.Store(dpad)
 		if dpad != 0 {
-			g.world.Update(&Player{PID: g.playerid, pos: pos})
+			g.world.Update(&Player{PID: g.playerid, pos: pos.Add(common.DIR(dpad).Vec().Scaled(1))})
 		}
 
 		if g.win.JustPressed(pixelgl.KeyPageDown) {
-			g.paging += PageAmount
+			g.controls.paging += PageAmount
 		}
 		if g.win.JustPressed(pixelgl.KeyPageUp) {
-			g.paging -= PageAmount
+			g.controls.paging -= PageAmount
 		}
 		if win.Pressed(pixelgl.KeyLeft) {
 			g.camPos.X -= g.camSpeed * dt
@@ -177,30 +173,34 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 			win.SetVSync(!win.VSync())
 			g.flashMessage("VSync: %v", win.VSync())
 		}
-		if win.JustPressed(pixelgl.Key2) {
-			g.muted = !g.muted
-			if g.muted {
-				g.mutechan <- struct{}{}
-				g.flashMessage("Muted!")
-			}
-			if !g.muted {
-				go g.soundtrack(g.nextchan, g.mutechan)
-				g.flashMessage("Unmuted!")
-			}
-		}
-		if win.JustPressed(pixelgl.Key3) {
-			g.nextchan <- struct{}{}
-			g.flashMessage("Next Song!")
-		}
+		// if win.JustPressed(pixelgl.Key2) {
+		// 	g.muted = !g.muted
+		// 	if g.muted {
+		// 		g.mutechan <- struct{}{}
+		// 		g.flashMessage("Muted!")
+		// 	}
+		// 	if !g.muted {
+		// 		go g.soundtrack(g.nextchan, g.mutechan)
+		// 		g.flashMessage("Unmuted!")
+		// 	}
+		// }
+		// if win.JustPressed(pixelgl.Key3) {
+		// 	g.nextchan <- struct{}{}
+		// 	g.flashMessage("Next Song!")
+		// }
 		if win.JustPressed(pixelgl.Key4) {
-			g.Debug = !g.Debug
-			codec.Debug = g.Debug
-			g.flashMessage("Debug: %v", g.Debug)
+			g.settings.Debug = !g.settings.Debug
+			codec.Debug = g.settings.Debug
+			g.flashMessage("Debug: %v", g.settings.Debug)
 		}
 		if win.JustPressed(pixelgl.Key5) {
-			g.flashMessage("Moving %s to %2.0f, %2.0f", g.pos, g.me.X(), g.me.Y())
-			g.pos.X = g.me.X()
-			g.pos.Y = g.me.Y()
+			g.flashMessage("Moving %s to %2.0f, %2.0f", pos, g.me.X(), g.me.Y())
+			pos.X = g.me.X()
+			pos.Y = g.me.Y()
+		}
+		if win.JustPressed(pixelgl.Key6) {
+			g.settings.SortThings = !g.settings.SortThings
+			g.flashMessage("Sorting Things: %v", g.settings.SortThings)
 		}
 		if win.JustPressed(pixelgl.KeyGraveAccent) {
 			// rebuild
@@ -216,12 +216,15 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 			panic("not updated")
 		}
 		if win.JustPressed(pixelgl.KeyEqual) {
-			g.camlock = !g.camlock
-			g.flashMessage("Camlock: %v", g.camlock)
+			g.settings.camlock = !g.settings.camlock
+			g.flashMessage("Camlock: %v", g.settings.camlock)
 		}
+
 	}
-	if g.camlock {
+
+	if g.settings.camlock {
 		g.camPos = pixel.Lerp(g.camPos, being2vec(g.me), 0.5)
+		//g.camPos = being2vec(g.pos)
 	}
 	return false, nil
 }
@@ -230,20 +233,24 @@ func (g *Game) handleChatConsole() {
 	inputbuf := g.inputbuf
 	if inputbuf.Len() == 1 {
 		inputbuf.Reset()
-		g.typing = false
+		g.settings.typing = false
 		return
 	}
 	fe := strings.Fields(strings.TrimPrefix(g.inputbuf.String(), "/"))
 	// slash /commands in chat
 	switch fe[0] {
+	case "help":
+		fmt.Fprintf(&g.chattxtbuffer, "%s\n\n", helpModeText)
+		g.controls.paging += 9 * PageAmount
+		return
 	case "channel":
 		g.chatcrypt.Reload(strings.Join(fe[1:], " "))
 	case "msg":
 		topl, err := strconv.ParseUint(fe[1], 10, 64)
 		if err != nil {
-			g.displaymsg = 0
+			g.stats.displaymsg = 0
 			g.statustxtbuf.Reset()
-			fmt.Fprintf(g.statustxtbuf, "error: %v\n", err)
+			fmt.Fprintf(&g.statustxtbuf, "error: %v\n", err)
 			return
 		}
 
@@ -253,12 +260,12 @@ func (g *Game) handleChatConsole() {
 		if err != nil {
 			log.Fatalln(err)
 		}
-		g.netsent += n
+		g.stats.netsent += n
 	case "tick":
 		if len(fe) != 2 {
-			g.displaymsg = 0
+			g.stats.displaymsg = 0
 			g.statustxtbuf.Reset()
-			fmt.Fprintf(g.statustxtbuf, "need 1 arg\n")
+			fmt.Fprintf(&g.statustxtbuf, "need 1 arg\n")
 			return
 		}
 		dur, err := time.ParseDuration(fe[1])
@@ -270,11 +277,11 @@ func (g *Game) handleChatConsole() {
 		if err != nil {
 			log.Fatalln(err)
 		}
-		g.netsent += n
+		g.stats.netsent += n
 		log.Println("sent update", dur.String())
 	default:
-		g.displaymsg = 0
+		g.stats.displaymsg = 0
 		g.statustxtbuf.Reset()
-		fmt.Fprintf(g.statustxtbuf, "%q\n", fe)
+		fmt.Fprintf(&g.statustxtbuf, "%q\n", fe)
 	}
 }
