@@ -46,23 +46,24 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 	}
 	if win.JustPressed(pixelgl.KeyEnter) {
 		g.settings.typing = !g.settings.typing
-		if !g.settings.typing && inputbuf.Len() != 0 {
-			if strings.HasPrefix(inputbuf.String(), "/") {
+		if !g.settings.typing && g.inputbuf.Len() != 0 {
+			if strings.HasPrefix(g.inputbuf.String(), "/") {
 				g.handleChatConsole()
+				g.inputbuf.Reset()
 			} else {
-				log.Println("Sending typed:", inputbuf.String())
+				log.Println("Sending typed:", g.inputbuf.String())
 				n, err := g.codec.Write(common.PlayerMessage{From: g.playerid, To: 0, Message: basex.Encode(g.chatcrypt.Encrypt(inputbuf.Bytes()))})
 				if err != nil {
 					log.Fatalln(err)
 				}
 				g.stats.netsent += n
+				g.inputbuf.Reset()
 			}
-			inputbuf.Reset()
 
 		}
 	}
-	if !g.settings.typing && inputbuf.Len() != 0 {
-		inputbuf.Reset()
+	if !g.settings.typing && g.inputbuf.Len() != 0 {
+		g.inputbuf.Reset()
 	}
 
 	if !g.settings.typing {
@@ -120,10 +121,10 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 		// 	//pos = pixel.Lerp(pos, pixel.V(xpos.X(), xpos.Y()), 0.5)
 		// }
 		action := common.PlayerAction{}
-		if win.JustPressed(pixelgl.KeySpace) {
+		if win.JustPressed(pixelgl.KeySpace) || win.JustPressed(pixelgl.MouseButtonLeft) {
 			action.Action = types.ActionManastorm.Uint16()
 			g.animations.Push(types.ActionManastorm, pos)
-			g.flashMessage("Manastorm!")
+			//g.flashMessage("Manastorm!")
 		}
 		if dpad != 0 || action.Action != 0 {
 			//go func() {
@@ -142,7 +143,7 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 		//g.spritematrices[g.playerid] = pixel.IM.Scaled(pixel.ZV, 4).Moved(pos)
 		g.controls.dpad.Store(dpad)
 		if dpad != 0 {
-			xy := (pos.Add(common.DIR(dpad).Vec().Scaled(1)))
+			xy := (pos.Add(common.DIR(dpad).Vec().Scaled(16)))
 			x, y := xy.X, xy.Y
 			g.me.MoveTo([2]float64{x, y})
 			g.world.Update(g.me)
@@ -236,9 +237,8 @@ func (g *Game) controldpad(dt float64) (continueNext bool, err error) {
 }
 
 func (g *Game) handleChatConsole() {
-	inputbuf := g.inputbuf
-	if inputbuf.Len() == 1 {
-		inputbuf.Reset()
+	if g.inputbuf.Len() == 1 {
+		g.inputbuf.Reset()
 		g.settings.typing = false
 		return
 	}

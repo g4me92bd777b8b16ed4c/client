@@ -543,16 +543,16 @@ func (g *Game) mainloop() {
 	var worldlen = 0
 	fmt.Fprintf(statustxt, "Press ENTER to continue!")
 
-	for !win.Closed() {
-		win.Clear(colornames.Brown)
-		if win.JustPressed(pixelgl.KeyEnter) {
-			break
-		}
-		statustxt.Draw(win, pixel.IM.Moved(win.Bounds().Center().Add(pixel.V(-200, 0))))
-		win.Update()
-	}
-	win.JustPressed(pixelgl.KeyEnter)
-	win.Pressed(pixelgl.KeyEnter)
+	// for !win.Closed() {
+	// 	win.Clear(colornames.Brown)
+	// 	if win.JustPressed(pixelgl.KeyEnter) {
+	// 		break
+	// 	}
+	// 	statustxt.Draw(win, pixel.IM.Moved(win.Bounds().Center().Add(pixel.V(-200, 0))))
+	// 	win.Update()
+	// }
+	// win.JustPressed(pixelgl.KeyEnter)
+	// win.Pressed(pixelgl.KeyEnter)
 	for !win.Closed() {
 		dt = time.Since(last).Seconds()
 		//playerSpeed = 100.0 * dt
@@ -635,10 +635,7 @@ func (g *Game) mainloop() {
 			continue
 		}
 		g.cam = pixel.IM.Scaled(g.camPos, g.camZoom).Moved(win.Bounds().Center().Sub(g.camPos))
-		// pos.X = g.me.X()
-		// pos.Y = g.me.Y()
 		g.camZoom *= math.Pow(g.camZoomSpeed, win.MouseScroll().Y)
-
 		win.Clear(colornames.Forestgreen)
 		win.SetMatrix(g.cam)
 		//g.win.SetMatrix(pixel.IM.Scaled(g.camPos, 10*g.camZoom).Moved(win.Bounds().Center().Sub(g.camPos)))
@@ -859,7 +856,7 @@ func (g *Game) readloop() {
 				log.Fatalln("YOU DEID")
 			}
 			go func() {
-
+				log.Println("LOGGING OFF:", logoff.UID)
 				delete(g.spritematrices, logoff.UID)
 				g.world.Remove(logoff.UID)
 				g.flashMessage("Player logged off: %d", logoff.UID)
@@ -872,51 +869,45 @@ func (g *Game) readloop() {
 			if err := g.codec.Decode(buf[:n], &a); err != nil {
 				log.Fatalln(err)
 			}
-			go func() {
-				being := g.world.Get(a.ID)
-				if being == nil {
-					// switch a.Type() {
-					// case types.Human:
-					// 	being = &Player{PID: a.ID}
-					// case types.GhostBomb:
-					// 	being = &GhostBomb{PID: a.ID}
-					// default:
-					log.Println("Skipping player action from dead/unknown entity:", a.Type().String())
-					return
-				}
 
-				oldv := pixel.V(float64(being.X()), float64(being.Y()))
-				if g.settings.Debug {
-					log.Println("got player action from server:", a.ID, "NEWPOS", a.Pos(), common.DPAD(a.DPad), "OLD POS", oldv, "HP:", a.HP)
-				}
+			being := g.world.Get(a.ID)
+			if being == nil {
+				// switch a.Type() {
+				// case types.Human:
+				// 	being = &Player{PID: a.ID}
+				// case types.GhostBomb:
+				// 	being = &GhostBomb{PID: a.ID}
+				// default:
+				log.Println("Skipping player action from dead/unknown entity:", a.Type().String())
+				continue
+			}
 
-				// update world with new being position
-				pv := pixel.V(float64(a.At[0]), float64(a.At[1]))
-				being.MoveTo([2]float64{pv.X, pv.Y})
+			oldv := pixel.V(float64(being.X()), float64(being.Y()))
+			if g.settings.Debug {
+				log.Println("got player action from server:", a.ID, "NEWPOS", a.Pos(), common.DPAD(a.DPad), "OLD POS", oldv, "HP:", a.HP)
+			}
 
-				switch being.(type) {
-				case *common.Player:
-					being.(*common.Player).SetHealth(a.HP)
-				// case *Player:
-				// 	being.(*Player).SetHealth(a.HP)
-				default:
-					log.Fatalf("unknonw type being for sethealth() %T %s", being, being.Type().String())
+			// update world with new being position
+			pv := pixel.V(float64(a.At[0]), float64(a.At[1]))
+			being.MoveTo([2]float64{pv.X, pv.Y})
+			being.SetHealth(a.HP)
+			if being.Health() != a.HP {
+				log.Fatalf("Couldnt set being health: %T, %02.0f, %02.0f", being, a.HP, being.Health())
+			}
+			if being.Health() == 0 {
+				//g.world.Remove(being.ID())
+				//log.Println("removed dead thing")
+				g.flashMessage("removed dead player: %d", a.ID)
+				continue
+			}
+			//log.Printf("%s %d has HP %02.0f", being.Type(), a.ID, being.Health(), a.HP)
+			g.world.Update(being)
+			if a.Action != 0 {
+				if a.ID != g.playerid {
+					g.animations.Push(types.ActionManastorm, pv)
+					g.flashMessage("Player %d cast %s", a.ID, types.Type(a.Action).String())
 				}
-				if being.Health() == 0 {
-					//g.world.Remove(being.ID())
-					//log.Println("removed dead thing")
-					g.flashMessage("removed dead player: %d", a.ID)
-					return
-				}
-				log.Printf("%s %d has HP %02.0f", being.Type(), a.ID, being.Health())
-				g.world.Update(being)
-				if a.Action != 0 {
-					if a.ID != g.playerid {
-						g.animations.Push(types.ActionManastorm, pv)
-						g.flashMessage("Player %d cast %s", a.ID, types.Type(a.Action).String())
-					}
-				}
-			}()
+			}
 
 		// case types.World:
 		// if g.settings.Debug {
