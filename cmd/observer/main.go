@@ -793,13 +793,13 @@ func (g *Game) readloop() {
 		switch types.Type(t) {
 		case types.Ping:
 			ping := &common.Ping{}
-			if err := ping.Decode(buf[:n]); err != nil {
+			if err := g.codec.Decode(buf[:n], ping); err != nil {
 				log.Fatalln(err)
 			}
 			g.stats.Ping = time.Since(ping.Time)
 		case types.Pong:
 			ping := &common.Pong{}
-			if err := ping.Decode(buf[:n]); err != nil {
+			if err := g.codec.Decode(buf[:n], ping); err != nil {
 				log.Fatalln(err)
 			}
 			g.stats.Ping = time.Since(ping.Time)
@@ -827,17 +827,16 @@ func (g *Game) readloop() {
 		case types.PlayerMessage:
 
 			m := &common.PlayerMessage{}
-			if err := m.Decode(buf[:n]); err != nil {
+			if err := g.codec.Decode(buf[:n], m); err != nil {
 				log.Fatalln(err)
 			}
 			go func() {
 				b, err := basex.Decode(m.Message)
 				if err == nil {
-
 					msg := g.chatcrypt.Decrypt(b)
 					if msg == nil {
 						log.Println("COULD NOT DECRYPT")
-						//continue
+						return
 					}
 					log.Println("Got message:", m.Message)
 					g.chatbuf.Push(chatstack.ChatMessage{
@@ -848,19 +847,22 @@ func (g *Game) readloop() {
 				}
 			}()
 		case types.PlayerLogoff:
-			if err := logoff.Decode(buf[:n]); err != nil {
+			if err := g.codec.Decode(buf[:n], logoff); err != nil {
 				log.Fatalln(err)
 			}
 			if logoff.UID == g.playerid {
 				log.Println("YOU DIEDE")
-				log.Fatalln("YOU DEID")
+				g.flashMessage("You died. Press any key to respawn.")
+				g.me.MoveTo([2]float64{0, 0})
+				g.world.Update(g.me)
+				continue
 			}
 			go func() {
 				log.Println("LOGGING OFF:", logoff.UID)
-				delete(g.spritematrices, logoff.UID)
+				// delete(g.spritematrices, logoff.UID)
 				g.world.Remove(logoff.UID)
 				g.flashMessage("Player logged off: %d", logoff.UID)
-				g.stats.numplayer--
+				// g.stats.numplayer--
 			}()
 
 		case types.PlayerAction:
@@ -894,6 +896,7 @@ func (g *Game) readloop() {
 			if being.Health() != a.HP {
 				log.Fatalf("Couldnt set being health: %T, %02.0f, %02.0f", being, a.HP, being.Health())
 			}
+			g.world.Update(being)
 			if being.Health() == 0 {
 				//g.world.Remove(being.ID())
 				//log.Println("removed dead thing")
@@ -901,7 +904,7 @@ func (g *Game) readloop() {
 				continue
 			}
 			//log.Printf("%s %d has HP %02.0f", being.Type(), a.ID, being.Health(), a.HP)
-			g.world.Update(being)
+
 			if a.Action != 0 {
 				if a.ID != g.playerid {
 					g.animations.Push(types.ActionManastorm, pv)
@@ -909,7 +912,7 @@ func (g *Game) readloop() {
 				}
 			}
 
-		// case types.World:
+			// case types.World:
 		// if g.settings.Debug {
 		// 	log.Printf("UPDATE WORLD:   %02x", buf[:n])
 		// }
@@ -938,7 +941,7 @@ func (g *Game) readloop() {
 		case types.Player:
 
 			p := &common.Player{}
-			if err := p.Decode(buf[:n]); err != nil {
+			if err := g.codec.Decode(buf[:n], p); err != nil {
 				log.Fatalln(err)
 			}
 			if p.HP == 0 {
@@ -954,7 +957,7 @@ func (g *Game) readloop() {
 		case types.GhostBomb:
 
 			p := &common.Player{}
-			if err := p.Decode(buf[:n]); err != nil {
+			if err := g.codec.Decode(buf[:n], p); err != nil {
 				log.Fatalln(err)
 			}
 			if p.HP == 0 {
