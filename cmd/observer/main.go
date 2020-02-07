@@ -63,10 +63,10 @@ func NewGame(playerid uint64) *Game {
 		world: worldpkg.New(), // holds position of rectangles
 
 		// sprites
-		pictures:       make(map[types.Type]pixel.Picture),
-		sprites:        make(map[types.Type]*pixel.Sprite),
-		spriteframes:   make(map[types.Type]map[byte][]pixel.Rect),
-		spritematrices: make(map[uint64]pixel.Matrix),
+		pictures:     make(map[types.Type]pixel.Picture),
+		sprites:      make(map[types.Type]*pixel.Sprite),
+		spriteframes: make(map[types.Type]map[byte][]pixel.Rect),
+		// spritematrices: make(map[uint64]pixel.Matrix),
 
 		// chat
 		chatbuf:   chatstack.New(),
@@ -106,7 +106,6 @@ func main() {
 	rand.Seed(xored) // random enough seed
 	playerid := rand.Uint64()
 	password := ""
-
 	flag.StringVar(&DefaultEndpoint, "s", DefaultEndpoint, "endpoint")
 	flag.Uint64Var(&playerid, "p", playerid, "endpoint")
 	flag.Int64Var(&xored, "seed", xored, "seed to use for fast random gen") // TODO: remove one day
@@ -146,16 +145,17 @@ func main() {
 		}
 	}
 
-	spritesheet, err := loadPicture("spritesheet/link.png")
-	if err != nil {
-		panic(err)
-	}
+	// spritesheet, err := loadPicture("spritesheet/link.png")
+	// if err != nil {
+	// 	panic(err)
+	// }
 	// game.spritesheet = spritesheet
-	game.sprites[types.Player] = pixel.NewSprite(spritesheet, game.spriteframes[types.Player][common.DOWN][0])
-	game.spritematrices[game.playerid] = pixel.IM.Scaled(pixel.ZV, 4)
+	// game.sprites[types.Player] = pixel.NewSprite(spritesheet, game.spriteframes[types.Player][common.DOWN][0])
+	// game.spritematrices[game.playerid] = pixel.IM.Scaled(pixel.ZV, 4)
 	game.controls.dpad = new(atomic.Value)
 	game.controls.dpad.Store(common.DOWN)
 
+	// login to server
 	n, err := game.codec.Write(common.Login{ID: playerid, Password: hashedpassword})
 	if err != nil {
 		log.Fatalln(err)
@@ -217,10 +217,10 @@ type Game struct {
 	me       worldpkg.Being
 
 	// graphics
-	pictures       map[types.Type]pixel.Picture
-	sprites        map[types.Type]*pixel.Sprite
-	spriteframes   map[types.Type]map[byte][]pixel.Rect
-	spritematrices map[uint64]pixel.Matrix
+	pictures     map[types.Type]pixel.Picture
+	sprites      map[types.Type]*pixel.Sprite
+	spriteframes map[types.Type]map[byte][]pixel.Rect
+	// spritematrices map[uint64]pixel.Matrix
 
 	// chat
 	chatbuf   *chatstack.ChatStack // incoming messages
@@ -433,7 +433,7 @@ func (g *Game) mainloop() {
 	// spritesheet2frames := map[string]pixel.Rect{
 	// 	"X": pixel.R(272, 225, 272+16, 225+16),
 	// }
-	statustxt := mkfont(0, 18.0, "font/elronmonospace.ttf")
+	statustxt := mkfont(0, 14.0, "font/elronmonospace.ttf")
 	//statustxt := mkfont(0, 24.0, "font/.ttf")
 	second := time.Tick(time.Second)
 	fps := 0
@@ -585,7 +585,8 @@ func (g *Game) mainloop() {
 			"DT=%.0fms FPS=%d PING=%s (%d entities) (%d online) VERSION=%s\n"+
 			"NET SENT=%04db/s RECV=%06d b/s GPS=%03.0f,%03.0f TYPING=%q\n%s\n"+
 			"heapalloc %v objects %v heap freed %v freed %v sys=%v mallocs=%v\n"+
-			"pausetotalNs=%v numgc=%v goroutines=%v\n",
+			"pausetotalNs=%v numgc=%v goroutines=%v\n"+
+			"HP: %02.0f\nMP: %02.0f\nXP: %02.0f\n",
 			lastdt*1000, lastfps, g.stats.Ping, worldlen, g.stats.numplayer, Version,
 			lastnetsend, lastnetrecv,
 			g.me.X(), g.me.Y(),
@@ -594,6 +595,7 @@ func (g *Game) mainloop() {
 			memstats.HeapAlloc, memstats.HeapObjects, memstats.HeapReleased, memstats.TotalAlloc-memstats.Alloc, memstats.Sys, memstats.Mallocs,
 			memstats.PauseTotalNs, memstats.NumGC,
 			numgoroutines,
+			g.me.Health(), 0.0, 0.0,
 		)
 
 		select {
@@ -736,11 +738,12 @@ func (g *Game) mainloop() {
 				//g.world.Remove(sorted[i].ID())
 			}
 			playertext.Clear()
-			fmt.Fprintf(playertext, "%d", sorted[i].ID())
+			hp := sorted[i].Health()
+			fmt.Fprintf(playertext, "%d (HP=%02.0f)", sorted[i].ID(), hp)
 			playertext.Draw(g.win, pixel.IM.Moved(bpos.Add(pixel.V(-10, -60))))
-			if sorted[i].Health() != 0 {
 
-				numHearts := math.Floor(sorted[i].Health() / 20)
+			if hp != 0 {
+				numHearts := math.Floor(hp / 20)
 				for i := 0.0; i < numHearts; i++ {
 					heart.Draw(win, pixel.IM.Moved(bpos.Add(pixel.V(-30+(i*16), 48))))
 				}
@@ -784,6 +787,7 @@ func (g *Game) readloop() {
 			if errcount > 3 {
 				log.Fatalln("max level of errors reached")
 			}
+			continue
 		}
 		g.stats.netrecvd += n
 		if g.settings.Debug {
@@ -912,7 +916,7 @@ func (g *Game) readloop() {
 				}
 			}
 
-			// case types.World:
+		// case types.World:
 		// if g.settings.Debug {
 		// 	log.Printf("UPDATE WORLD:   %02x", buf[:n])
 		// }
@@ -944,9 +948,6 @@ func (g *Game) readloop() {
 			if err := g.codec.Decode(buf[:n], p); err != nil {
 				log.Fatalln(err)
 			}
-			if p.HP == 0 {
-				log.Fatalln("got 0 player")
-			}
 			go func() {
 				//log.Println("Got player:", p)
 				if newplayer := g.world.Update(p); newplayer {
@@ -960,16 +961,14 @@ func (g *Game) readloop() {
 			if err := g.codec.Decode(buf[:n], p); err != nil {
 				log.Fatalln(err)
 			}
-			if p.HP == 0 {
-				log.Fatalln("got 0 ghostbomb")
-			}
 			go func() {
 				//log.Println("Got player:", p)
 				g.world.Update(p)
 				//g.spritematrices[p.ID()] = pixel.IM.Scaled(pixel.ZV, 4).Moved(being2vec(p))
 			}()
 		default:
-			log.Fatalln("alien packet:", types.Type(t).String())
+			errcount++
+			log.Println("alien packet:", types.Type(t).String())
 		}
 
 	}
