@@ -86,6 +86,11 @@ func NewGame(playerid uint64) *Game {
 func DefaultSettings() *RuntimeSettings {
 	return &RuntimeSettings{
 		keymap: DefaultKeymap(),
+		showChat: true,
+		showWireframe: true,
+		showLand: true,
+		showPlayerText: true,
+		showEntities: true,
 	}
 }
 
