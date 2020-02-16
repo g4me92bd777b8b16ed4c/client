@@ -17,13 +17,13 @@ import (
 	"github.com/aerth/spriteutil"
 	"github.com/bcvery1/tilepix"
 	"gitlab.com/aerth/x/hash/argon2id"
-	"gitlab.com/g4me92bd777b8b16ed4c/common"
-	"gitlab.com/g4me92bd777b8b16ed4c/common/chatenc"
-	// "gitlab.com/g4me92bd777b8b16ed4c/common/chatstack"
-	"gitlab.com/g4me92bd777b8b16ed4c/common/codec"
-	"gitlab.com/g4me92bd777b8b16ed4c/common/plugint"
-	"gitlab.com/g4me92bd777b8b16ed4c/common/types"
-	"gitlab.com/g4me92bd777b8b16ed4c/common/world"
+	"github.com/g4me92bd777b8b16ed4c/common"
+	"github.com/g4me92bd777b8b16ed4c/common/chatenc"
+	// "github.com/g4me92bd777b8b16ed4c/common/chatstack"
+	"github.com/g4me92bd777b8b16ed4c/common/codec"
+	"github.com/g4me92bd777b8b16ed4c/common/plugint"
+	"github.com/g4me92bd777b8b16ed4c/common/types"
+	"github.com/g4me92bd777b8b16ed4c/common/world"
 	"golang.org/x/image/colornames"
 
 	"net"
@@ -41,8 +41,8 @@ import (
 	"github.com/faiface/pixel/text"
 	"github.com/pkg/profile"
 	basexlib "gitlab.com/aerth/x/encoding/basex"
-	"gitlab.com/g4me92bd777b8b16ed4c/assets"
-	worldpkg "gitlab.com/g4me92bd777b8b16ed4c/common/world"
+	"github.com/g4me92bd777b8b16ed4c/assets"
+	worldpkg "github.com/g4me92bd777b8b16ed4c/common/world"
 )
 
 var (

@@ -6,10 +6,10 @@ import (
 	"github.com/faiface/pixel"
 	"github.com/faiface/pixel/imdraw"
 
-	//"gitlab.com/g4me92bd777b8b16ed4c/common"
+	//"github.com/g4me92bd777b8b16ed4c/common"
 	"log"
 
-	"gitlab.com/g4me92bd777b8b16ed4c/common/types"
+	"github.com/g4me92bd777b8b16ed4c/common/types"
 )
 
 type Animation interface {

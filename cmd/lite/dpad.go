@@ -11,10 +11,10 @@ import (
 
 	"github.com/faiface/pixel"
 	"github.com/faiface/pixel/pixelgl"
-	"gitlab.com/g4me92bd777b8b16ed4c/common"
-	"gitlab.com/g4me92bd777b8b16ed4c/common/codec"
-	"gitlab.com/g4me92bd777b8b16ed4c/common/types"
-	"gitlab.com/g4me92bd777b8b16ed4c/common/updater"
+	"github.com/g4me92bd777b8b16ed4c/common"
+	"github.com/g4me92bd777b8b16ed4c/common/codec"
+	"github.com/g4me92bd777b8b16ed4c/common/types"
+	"github.com/g4me92bd777b8b16ed4c/common/updater"
 )
 
 const playerSpeed = 8

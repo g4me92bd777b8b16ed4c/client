@@ -4,9 +4,9 @@ import (
 	_ "image/png"
 	"log"
 
-	"gitlab.com/g4me92bd777b8b16ed4c/common"
-	// "gitlab.com/g4me92bd777b8b16ed4c/common/chatstack"
-	"gitlab.com/g4me92bd777b8b16ed4c/common/types"
+	"github.com/g4me92bd777b8b16ed4c/common"
+	// "github.com/g4me92bd777b8b16ed4c/common/chatstack"
+	"github.com/g4me92bd777b8b16ed4c/common/types"
 
 	"time"
 

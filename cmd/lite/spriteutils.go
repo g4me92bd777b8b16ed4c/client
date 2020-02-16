@@ -9,7 +9,7 @@ import (
 	"github.com/faiface/pixel"
 	"github.com/faiface/pixel/text"
 	"github.com/golang/freetype/truetype"
-	"gitlab.com/g4me92bd777b8b16ed4c/assets"
+	"github.com/g4me92bd777b8b16ed4c/assets"
 )
 
 // IM is pixel
